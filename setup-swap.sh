@@ -1,25 +1,52 @@
 #!/bin/bash
 set -e
 
-SWAP_DEV="/dev/nvme1n1p3"
+POOL="tank"
+ZVOL_NAME="swap"
+ZVOL_PATH="$POOL/$ZVOL_NAME"
+ZVOL_DEV="/dev/zvol/$ZVOL_PATH"
+SIZE="16G"
 
-echo "=== スワップ設定: $SWAP_DEV ==="
+echo "=== ZFS zvol スワップ設定 ==="
+echo "  プール : $POOL"
+echo "  zvol   : $ZVOL_PATH"
+echo "  サイズ : $SIZE"
+echo ""
+
+# zvol 作成（既存チェックあり）
+echo "[1/4] zvol 作成 ..."
+if zfs list "$ZVOL_PATH" &>/dev/null; then
+    echo "  既に存在します。スキップ。"
+else
+    sudo zfs create -V "$SIZE" \
+        -b "$(getconf PAGESIZE)" \
+        -o compression=off \
+        -o sync=always \
+        "$ZVOL_PATH"
+    echo "  作成しました。"
+fi
+
+# デバイスが現れるまで待機
+echo "[2/4] デバイス待機 ..."
+for i in $(seq 1 10); do
+    [ -b "$ZVOL_DEV" ] && break
+    sleep 1
+done
+[ -b "$ZVOL_DEV" ] || { echo "ERROR: $ZVOL_DEV が見つかりません"; exit 1; }
 
 # スワップフォーマット
-echo "[1/3] mkswap ..."
-sudo mkswap "$SWAP_DEV"
+echo "[3/4] mkswap ..."
+sudo mkswap -f "$ZVOL_DEV"
 
 # スワップ有効化
-echo "[2/3] swapon ..."
-sudo swapon "$SWAP_DEV"
+echo "[4/4] swapon + fstab 登録 ..."
+sudo swapon "$ZVOL_DEV"
 
-# fstab に追記（重複チェックあり）
-echo "[3/3] /etc/fstab に追記 ..."
-if grep -q "$SWAP_DEV" /etc/fstab; then
-    echo "  既に fstab に登録済みです。スキップ。"
+if grep -q "$ZVOL_DEV" /etc/fstab; then
+    echo "  fstab に既に登録済みです。スキップ。"
 else
-    echo "$SWAP_DEV none swap sw 0 0" | sudo tee -a /etc/fstab
-    echo "  追記しました。"
+    echo "$ZVOL_DEV none swap sw 0 0" | sudo tee -a /etc/fstab
+    echo "  fstab に追記しました。"
 fi
 
 echo ""
